@@ -24,6 +24,7 @@ type RetryingRequestQueue[T any, R any] struct {
 	retryQueue                []RequestWrapper[T]
 	mutex                     sync.Mutex
 	ctx                       context.Context
+	cancelFn                  context.CancelFunc
 }
 
 func NewRetryingRequestQueue[T any, R any](
@@ -33,7 +34,7 @@ func NewRetryingRequestQueue[T any, R any](
 	isErrorFn func(*R) bool,
 	canRetryFn func(*T, *R, int, time.Time) bool,
 	innerQueue *RequestQueue[T]) *RetryingRequestQueue[T, R] {
-	return &RetryingRequestQueue[T, R]{
+	queue := &RetryingRequestQueue[T, R]{
 		getResponseChannelFn:      getResponseChannelFn,
 		exchangeResponseChannelFn: exchangeResponseChannelFn,
 		createErrorResponseFn:     createErrorResponseFn,
@@ -41,8 +42,10 @@ func NewRetryingRequestQueue[T any, R any](
 		canRetryFn:                canRetryFn,
 		innerQueue:                innerQueue,
 		retryQueue:                make([]RequestWrapper[T], 0, 10),
-		ctx:                       context.Background(),
 	}
+	queue.ctx, queue.cancelFn = context.WithCancel(context.Background())
+
+	return queue
 }
 
 func (q *RetryingRequestQueue[T, R]) Enqueue(request *T) error {
@@ -93,14 +96,18 @@ func (q *RetryingRequestQueue[T, R]) internalEnqueue(wrapper *RequestWrapper[T])
 func (q *RetryingRequestQueue[T, R]) Run() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
+	run := true
 
-	select {
-	case <-ticker.C:
-		q.doRetry()
-		break
-	case <-q.ctx.Done():
-		break
+	for run {
+		select {
+		case <-ticker.C:
+			q.doRetry()
+		case <-q.ctx.Done():
+			run = false
+		}
 	}
+
+	q.cancelPending()
 }
 
 func (q *RetryingRequestQueue[T, R]) enqueueForRetry(
@@ -154,12 +161,17 @@ func (q *RetryingRequestQueue[T, R]) cancelRequest(wrapper *RequestWrapper[T]) {
 }
 
 func (q *RetryingRequestQueue[T, R]) Stop() {
-	q.ctx.Done()
+	// Cancel the context so run terminates immediately
+	q.cancelFn()
+}
 
+func (q *RetryingRequestQueue[T, R]) cancelPending() {
 	for {
 		q.mutex.Lock()
+		itemCount := len(q.retryQueue)
 
-		if len(q.retryQueue) == 0 {
+		if itemCount == 0 {
+			fmt.Printf("%T No more pending requests to cancel\n", q)
 			q.mutex.Unlock()
 			return
 		}
