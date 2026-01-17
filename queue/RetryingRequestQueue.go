@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+type RetryingQueueStats struct {
+	QueueStats
+	PeakFailedAttempts     int
+	PeakFailedAttemptsTime time.Time
+}
+
 type RequestWrapper[T any] struct {
 	Request          T
 	attemptCount     int
@@ -25,6 +31,10 @@ type RetryingRequestQueue[T any, R any] struct {
 	mutex                     sync.Mutex
 	ctx                       context.Context
 	cancelFn                  context.CancelFunc
+	peakCount                 int
+	peakCountTime             time.Time
+	peakFailedAttempts        int
+	peakFailedAttemptsTime    time.Time
 }
 
 func NewRetryingRequestQueue[T any, R any](
@@ -114,9 +124,22 @@ func (q *RetryingRequestQueue[T, R]) enqueueForRetry(
 	wrapper *RequestWrapper[T],
 	originalResponseCh chan R) error {
 	q.exchangeResponseChannelFn(&wrapper.Request, originalResponseCh)
+
+	// Acquire the mutex since we're manipulating state from the goroutine that reads the response channel
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 	q.retryQueue = append(q.retryQueue, *wrapper)
+	currentCount := len(q.retryQueue)
+
+	if currentCount > q.peakCount {
+		q.peakCount = currentCount
+		q.peakCountTime = time.Now()
+	}
+
+	if wrapper.attemptCount > q.peakFailedAttempts {
+		q.peakFailedAttempts = wrapper.attemptCount
+		q.peakFailedAttemptsTime = time.Now()
+	}
 
 	return nil
 }
@@ -183,5 +206,20 @@ func (q *RetryingRequestQueue[T, R]) cancelPending() {
 
 		// Unlock first, so we avoid locking while writing to a channel
 		q.cancelRequest(&req)
+	}
+}
+
+func (q *RetryingRequestQueue[T, R]) Stats() RetryingQueueStats {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	return RetryingQueueStats{
+		QueueStats: QueueStats{
+			CurrentCount:  len(q.retryQueue),
+			PeakCount:     q.peakCount,
+			PeakCountTime: q.peakCountTime,
+		},
+		PeakFailedAttempts:     q.peakFailedAttempts,
+		PeakFailedAttemptsTime: q.peakFailedAttemptsTime,
 	}
 }

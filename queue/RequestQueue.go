@@ -3,6 +3,7 @@ package queue
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 // RequestQueue accepts requests and dispatches them to a destination
@@ -15,6 +16,8 @@ type RequestQueue[T any] struct {
 	running                  bool
 	mu                       sync.Mutex
 	requestNotEmptyCondition *sync.Cond
+	peakCount                int
+	peakCountTime            time.Time
 }
 
 func NewRequestQueue[T any](destination chan T) *RequestQueue[T] {
@@ -36,6 +39,13 @@ func (q *RequestQueue[T]) Enqueue(request *T) error {
 	}
 
 	q.requests = append(q.requests, *request)
+	currentCount := len(q.requests)
+
+	if currentCount > q.peakCount {
+		q.peakCount = currentCount
+		q.peakCountTime = time.Now()
+	}
+
 	q.requestNotEmptyCondition.Signal()
 
 	return nil
@@ -72,4 +82,10 @@ func (q *RequestQueue[T]) Stop() {
 	defer q.mu.Unlock()
 	q.running = false
 	q.requestNotEmptyCondition.Broadcast()
+}
+
+func (q *RequestQueue[T]) Stats() QueueStats {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return QueueStats{CurrentCount: len(q.requests), PeakCount: q.peakCount, PeakCountTime: q.peakCountTime}
 }
