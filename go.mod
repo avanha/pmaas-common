@@ -1,3 +1,3 @@
-module pmaas.io/common
+module github.com/avanha/pmaas-common
 
 go 1.25
