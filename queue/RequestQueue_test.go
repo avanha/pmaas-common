@@ -34,7 +34,7 @@ func TestRequestQueue_EnqueueAndRun(t *testing.T) {
 		// Run in a goroutine within the synctest bubble
 		go q.Run()
 
-		// Wait for the worker to process the first item
+		// Wait for the worker to write the first request into the channel
 		synctest.Wait()
 
 		// Verify that the first request is received
@@ -47,7 +47,7 @@ func TestRequestQueue_EnqueueAndRun(t *testing.T) {
 			t.Fatal("Expected req1 to be available in dest")
 		}
 
-		// Wait for the worker to process the second item
+		// // Wait for the worker to write the second request into the channel
 		synctest.Wait()
 
 		// Verify that the second request is received
