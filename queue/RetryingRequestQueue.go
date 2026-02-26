@@ -20,6 +20,16 @@ type RequestWrapper[T any] struct {
 	lastAttemptTime  time.Time
 }
 
+// RetryingRequestQueue is a wrapper around a regular queue that can queue requests for retry when they
+// fail with specific errors.  T is the request type and R is the response type.  Create the RetryingRequestQueue with
+// functions for the following tasks:
+// getResponseChannelFn A function that obtains the response channel from the request.  This is used to read the
+// response so we can check for failures.
+// exchangeResponseChannelFn A function that can swap the response channel in the request.  Used to intercept the
+// response.
+// createErrorResponseFn Factory for error responses when the RetryingRequestQueue itself needs to fail requests.
+// isErrorFn Checks whether the response read from the response chanel is an error.
+// canRetryFn Checks whether request can be retried after the error.
 type RetryingRequestQueue[T any, R any] struct {
 	getResponseChannelFn      func(*T) chan R
 	exchangeResponseChannelFn func(*T, chan R) chan R
@@ -71,6 +81,8 @@ func (q *RetryingRequestQueue[T, R]) internalEnqueue(wrapper *RequestWrapper[T])
 	now := time.Now()
 	ourResponseChannel := make(chan R)
 	originalResponseCh := q.exchangeResponseChannelFn(&wrapper.Request, ourResponseChannel)
+	wrapper.attemptCount++
+	wrapper.lastAttemptTime = now
 
 	err := q.innerQueue.Enqueue(&wrapper.Request)
 
@@ -78,10 +90,8 @@ func (q *RetryingRequestQueue[T, R]) internalEnqueue(wrapper *RequestWrapper[T])
 		return err
 	}
 
-	wrapper.attemptCount++
-	wrapper.lastAttemptTime = now
-
 	go func() {
+		// Get the response and check whether it's an error
 		response := <-ourResponseChannel
 		isError := q.isErrorFn(&response)
 
@@ -204,7 +214,7 @@ func (q *RetryingRequestQueue[T, R]) cancelPending() {
 		q.retryQueue = q.retryQueue[1:]
 		q.mutex.Unlock()
 
-		// Unlock first, so we avoid locking while writing to a channel
+		// Unlock first, so we don't hold the lock while writing to a channel
 		q.cancelRequest(&req)
 	}
 }
