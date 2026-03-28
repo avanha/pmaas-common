@@ -1,3 +1,3 @@
 module github.com/avanha/pmaas-common
 
-go 1.25
+go 1.26
