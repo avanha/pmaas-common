@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/avanha/pmaas-core/internal/mailbox"
+	"github.com/avanha/pmaas-common/mailbox"
 )
 
 func TestMailbox_ExecVoidFn(t *testing.T) {
