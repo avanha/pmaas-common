@@ -23,3 +23,16 @@ func (r *Register[T]) Set(timestamp time.Time, newValue T) bool {
 	r.UpdateTime = timestamp
 	return true
 }
+
+// Timestamped is satisfied by *Register[T] regardless of T.
+type Timestamped interface {
+	Timestamp() time.Time
+}
+
+// Timestamp returns when r's Value was last set. It's named Timestamp, not UpdateTime, only because
+// UpdateTime is already the exported field name — a method can't share it.
+func (r *Register[T]) Timestamp() time.Time {
+	return r.UpdateTime
+}
+
+var _ Timestamped = (*Register[struct{}])(nil)
