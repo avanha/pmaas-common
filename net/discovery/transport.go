@@ -75,6 +75,24 @@ type Config struct {
 	// would do nothing.
 	EnableSend    bool
 	EnableReceive bool
+
+	// TTL is the IP TTL (hop count) on sent packets, ignored if EnableSend is false. Left at
+	// its zero value, the OS default of 1 applies, meaning a packet dies at the first router
+	// it reaches and can never leave the local network segment - by far the safest default for
+	// administratively-scoped multicast, and the reason this can default to zero rather than
+	// needing every caller to set it explicitly.
+	//
+	// Set above 1 only if this traffic is meant to cross a router onto another subnet/VLAN on
+	// the same site, and that router has been explicitly configured for it - a plain L2 switch
+	// feature like IGMP snooping/querier does NOT enable this (it only affects delivery within
+	// one subnet), and neither does IGMP snooping working correctly for other on-subnet
+	// multicast traffic (e.g. Sonos) on the same network. Crossing a router hop needs actual
+	// multicast routing (PIM) or an IGMP-proxy feature bridging the two segments (some
+	// consumer/prosumer routers, e.g. MikroTik RouterOS 7, support this) - and even then, TTL
+	// must be high enough to survive every hop the packet needs to cross (2 for one router
+	// hop, and so on), since every router decrements it by 1 and drops the packet outright if
+	// that reaches 0, regardless of how well multicast routing is otherwise configured.
+	TTL int
 }
 
 // Transport is a raw multicast pub/sub primitive: send/receive byte payloads to/from a
@@ -180,7 +198,27 @@ func NewTransport(instanceID InstanceID, config Config) (*Transport, error) {
 		t.sendPC = pc
 	}
 
+	if config.EnableSend && config.TTL > 0 {
+		if err := t.sendPC.SetMulticastTTL(config.TTL); err != nil {
+			t.closeSockets()
+			return nil, fmt.Errorf("discovery: unable to set multicast TTL %d: %w", config.TTL, err)
+		}
+	}
+
 	return t, nil
+}
+
+// closeSockets is NewTransport's own cleanup path for an error after one or both sockets have
+// already been opened - unlike Close, it doesn't wait on doneCh (the receive loop, if any,
+// hasn't been started yet at any point this is called) and isn't guarded by closeOnce, since
+// NewTransport never returns a *Transport for a caller to Close in this case.
+func (t *Transport) closeSockets() {
+	if t.recvPC != nil {
+		_ = t.recvPC.Close()
+	}
+	if t.sendPC != nil && t.sendPC != t.recvPC {
+		_ = t.sendPC.Close()
+	}
 }
 
 // Publish sends payload to the multicast group. Returns an error if this Transport wasn't
