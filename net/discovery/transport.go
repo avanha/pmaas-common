@@ -43,15 +43,17 @@ func NewInstanceID() InstanceID {
 type Packet struct {
 	Sender InstanceID
 	From   *net.UDPAddr
-	Data   []byte
+	Data   json.RawMessage
 }
 
-// frame is the wire format Transport actually sends: an InstanceID wrapper around an
-// opaque payload. json encodes/decodes a []byte field as base64 automatically, so this stays
-// simple without hand-rolled framing.
+// frame is the wire format Transport actually sends: an InstanceID wrapper around a JSON
+// payload. Data is typed json.RawMessage rather than []byte specifically so it's embedded as a
+// literal nested JSON value - encoding/json instead base64-encodes a plain []byte field into a
+// JSON string, which every caller here would be paying for (~33% wire size inflation) with
+// nothing to show for it, since every payload Transport ever sends is already valid JSON.
 type frame struct {
-	Sender InstanceID `json:"sender"`
-	Data   []byte     `json:"data"`
+	Sender InstanceID      `json:"sender"`
+	Data   json.RawMessage `json:"data"`
 }
 
 // Config controls how a Transport joins and uses a multicast group.
@@ -221,14 +223,14 @@ func (t *Transport) closeSockets() {
 	}
 }
 
-// Publish sends payload to the multicast group. Returns an error if this Transport wasn't
-// configured with EnableSend.
-func (t *Transport) Publish(payload []byte) error {
+// Publish sends payload (which must be valid JSON - see frame) to the multicast group. Returns
+// an error if this Transport wasn't configured with EnableSend.
+func (t *Transport) Publish(payload json.RawMessage) error {
 	if !t.config.EnableSend {
 		return errors.New("discovery: transport is not configured to send")
 	}
 
-	data, err := json.Marshal(frame{Sender: t.instanceID, Data: payload})
+	data, err := t.encodeFrame(payload)
 	if err != nil {
 		return fmt.Errorf("discovery: unable to encode frame: %w", err)
 	}
@@ -237,6 +239,41 @@ func (t *Transport) Publish(payload []byte) error {
 		return fmt.Errorf("discovery: unable to send to %s: %w", t.config.GroupAddress, err)
 	}
 	return nil
+}
+
+func (t *Transport) encodeFrame(payload json.RawMessage) ([]byte, error) {
+	return encodeFrame(t.instanceID, payload)
+}
+
+func encodeFrame(sender InstanceID, payload json.RawMessage) ([]byte, error) {
+	return json.Marshal(frame{Sender: sender, Data: payload})
+}
+
+// frameOverhead is the exact number of wire bytes Publish's frame wrapper adds on top of
+// whatever payload it's given: the fixed JSON structure (field names/quotes/braces) plus the
+// sender id. Since Data is embedded as a literal JSON value rather than base64-encoded (see
+// frame), this is a plain additive offset - a caller fitting a payload within a wire-size
+// budget (see Service.SendAnnounce's batching) just subtracts this once, no inverse-encoding
+// math needed.
+func (t *Transport) frameOverhead() int {
+	return frameOverheadForSender(t.instanceID)
+}
+
+// frameOverheadForSender is frameOverhead without needing a live Transport - every InstanceID
+// is the same fixed length (see NewInstanceID), so this depends only on the sender value
+// itself, not on any socket state, which is what lets Service's byte-budget math (and its
+// tests) be computed without opening a real connection.
+func frameOverheadForSender(sender InstanceID) int {
+	// A nil or empty json.RawMessage wouldn't measure the real per-message overhead correctly
+	// (nil marshals to the 4-byte literal "null"; a non-nil empty one marshals to zero bytes,
+	// which isn't even valid JSON in the "data" position) - "{}" is the smallest realistic
+	// valid JSON value, so subtracting its own length back out afterward leaves exactly the
+	// fixed structural overhead alone.
+	probe := json.RawMessage("{}")
+	// Error is unreachable: frame is a plain struct of an InstanceID (a string) and a
+	// json.RawMessage that's already known-valid JSON, both always marshalable.
+	encoded, _ := encodeFrame(sender, probe)
+	return len(encoded) - len(probe)
 }
 
 // Packets returns the channel of received, self-filtered packets. Closed once Close has
