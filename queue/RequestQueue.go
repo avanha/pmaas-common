@@ -8,8 +8,9 @@ import (
 
 // RequestQueue accepts requests and dispatches them to a destination
 // channel when the channel has capacity.  The queue stores requests
-// in the requests slice when there is no capacity.  The Run method
-// continues to run until running is false and the requests slice is empty.
+// in the "requests" slice when there is no capacity.  The Run method drains all
+// queued requests on Stop. The method continues to run until "running" is false
+// and the "requests" slice is empty.
 type RequestQueue[T any] struct {
 	requests                 []T
 	destination              chan T
