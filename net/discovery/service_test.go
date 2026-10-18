@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,7 @@ func TestBatchEntityAnnouncementsRespectsBudget(t *testing.T) {
 		}
 	}
 
-	batches, err := batchEntityAnnouncements(entities, maxBodyBytes)
+	batches, err := batchEntityAnnouncements(slog.New(slog.DiscardHandler), entities, maxBodyBytes)
 	if err != nil {
 		t.Fatalf("batchEntityAnnouncements: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestBatchEntityAnnouncementsRespectsBudget(t *testing.T) {
 }
 
 func TestBatchEntityAnnouncementsEmptyInput(t *testing.T) {
-	batches, err := batchEntityAnnouncements(nil, 1000)
+	batches, err := batchEntityAnnouncements(slog.New(slog.DiscardHandler), nil, 1000)
 	if err != nil {
 		t.Fatalf("batchEntityAnnouncements: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestBatchEntityAnnouncementsOversizedEntitySentAlone(t *testing.T) {
 
 	// A tiny budget that can't possibly fit the oversized entity, to exercise the "can't split
 	// it further, send it alone" fallback rather than dropping it or looping forever.
-	batches, err := batchEntityAnnouncements([]EntityAnnouncement{oversized, normal}, 100)
+	batches, err := batchEntityAnnouncements(slog.New(slog.DiscardHandler), []EntityAnnouncement{oversized, normal}, 100)
 	if err != nil {
 		t.Fatalf("batchEntityAnnouncements: %v", err)
 	}

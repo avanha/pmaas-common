@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -58,6 +59,9 @@ type frame struct {
 
 // Config controls how a Transport joins and uses a multicast group.
 type Config struct {
+	// Logger is where the transport logs what it drops. It may be left nil.
+	Logger *slog.Logger
+
 	// GroupAddress is the multicast group and port, e.g. "239.192.42.1:9999". Must be in the
 	// administratively-scoped range 239.0.0.0/8-239.255.255.255 for LAN-local traffic that
 	// should never be routed beyond the local network segment.
@@ -111,6 +115,7 @@ type Config struct {
 // traffic to a specific interface, which is why this depends on x/net rather than staying
 // stdlib-only.
 type Transport struct {
+	log        *slog.Logger
 	instanceID InstanceID
 	config     Config
 	groupAddr  *net.UDPAddr
@@ -148,7 +153,13 @@ func NewTransport(instanceID InstanceID, config Config) (*Transport, error) {
 		}
 	}
 
+	log := config.Logger
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+
 	t := &Transport{
+		log:        log,
 		instanceID: instanceID,
 		config:     config,
 		groupAddr:  groupAddr,
@@ -297,7 +308,7 @@ func (t *Transport) receiveLoop() {
 
 		var f frame
 		if err := json.Unmarshal(buf[:n], &f); err != nil {
-			fmt.Printf("discovery: dropping malformed frame from %s: %v\n", from, err)
+			t.log.Warn("dropping malformed frame", "from", from.String(), "error", err)
 			continue
 		}
 
@@ -318,7 +329,7 @@ func (t *Transport) receiveLoop() {
 			// unblock a pending ReadFrom. Consumers that need every message should drain
 			// Packets() promptly and keep their own handling of each one fast - the same
 			// requirement already placed on EventManager receivers in this codebase.
-			fmt.Printf("discovery: dropping packet from %s, receiver not keeping up\n", f.Sender)
+			t.log.Warn("dropping packet, receiver not keeping up", "sender", f.Sender)
 		}
 	}
 }

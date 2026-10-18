@@ -3,6 +3,7 @@ package discovery
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 )
 
@@ -56,14 +57,14 @@ func (s *Service) run() {
 	for packet := range s.transport.Packets() {
 		var envelope Envelope
 		if err := json.Unmarshal(packet.Data, &envelope); err != nil {
-			fmt.Printf("discovery: dropping malformed envelope from %s: %v\n", packet.Sender, err)
+			s.transport.log.Warn("dropping malformed envelope", "sender", packet.Sender, "error", err)
 			continue
 		}
 
 		select {
 		case s.eventCh <- Event{Sender: packet.Sender, From: packet.From, Envelope: envelope}:
 		default:
-			fmt.Printf("discovery: dropping event from %s, receiver not keeping up\n", packet.Sender)
+			s.transport.log.Warn("dropping event, receiver not keeping up", "sender", packet.Sender)
 		}
 	}
 }
@@ -90,7 +91,7 @@ func (s *Service) SendAnnounce(entities []EntityAnnouncement) error {
 		return err
 	}
 
-	batches, err := batchEntityAnnouncements(entities, maxBodyBytes)
+	batches, err := batchEntityAnnouncements(s.transport.log, entities, maxBodyBytes)
 	if err != nil {
 		return err
 	}
@@ -155,7 +156,7 @@ func maxAnnounceBodyBytesForOverhead(frameOverhead int) (int, error) {
 // encoded length exactly once up front rather than repeatedly re-encoding a growing array.
 // A single entity that doesn't fit under maxBodyBytes even alone is still sent alone, as a
 // best-effort batch of one, since it can't be split any further.
-func batchEntityAnnouncements(entities []EntityAnnouncement, maxBodyBytes int) ([][]EntityAnnouncement, error) {
+func batchEntityAnnouncements(log *slog.Logger, entities []EntityAnnouncement, maxBodyBytes int) ([][]EntityAnnouncement, error) {
 	const brackets = 2 // "[" + "]"
 
 	var batches [][]EntityAnnouncement
@@ -184,9 +185,8 @@ func batchEntityAnnouncements(entities []EntityAnnouncement, maxBodyBytes int) (
 		currentLen += addition
 
 		if currentLen > maxBodyBytes && len(currentBatch) == 1 {
-			fmt.Printf(
-				"discovery: entity %q is %d bytes, over the %d-byte announce budget on its own - sending it alone anyway\n",
-				entity.EntityId, currentLen, maxBodyBytes)
+			log.Warn("entity is over the announce budget on its own, sending it alone anyway",
+				"entity", entity.EntityId, "bytes", currentLen, "budget", maxBodyBytes)
 		}
 	}
 

@@ -204,7 +204,6 @@ func (q *RetryingRequestQueue[T, R]) cancelPending() {
 		itemCount := len(q.retryQueue)
 
 		if itemCount == 0 {
-			fmt.Printf("%T No more pending requests to cancel\n", q)
 			q.mutex.Unlock()
 			return
 		}
